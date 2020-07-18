@@ -302,16 +302,30 @@ function sizeof_nothrow(@nospecialize(x))
         end
     elseif isa(x, Conditional)
         return true
-    else
-        x = widenconst(x)
     end
     if isa(x, Union)
         return sizeof_nothrow(x.a) && sizeof_nothrow(x.b)
     end
-    isconstType(x) && (x = x.parameters[1]) # since sizeof(typeof(x)) == sizeof(x)
-    x === DataType && return false
+    t, exact = instanceof_tfunc(x)
+    if !exact
+        # Could always be bottom at runtime, which throws
+        return false
+    end
+    if t !== Bottom
+        # The value corresponding to `x` at runtime could be a type.
+        # Normalize the query to ask about that type.
+        t === DataType && return true
+        x = t
+        if isa(x, Union)
+            return sizeof_nothrow(x.a) && sizeof_nothrow(x.b)
+        end
+    else
+        x = widenconst(x)
+        x === DataType && return false
+    end
     return isconcretetype(x) || isprimitivetype(x)
 end
+
 function _const_sizeof(@nospecialize(x))
     # Constant Vector does not have constant size
     isa(x, Vector) && return Int
@@ -330,9 +344,21 @@ function sizeof_tfunc(@nospecialize(x),)
     isa(x, Const) && return _const_sizeof(x.val)
     isa(x, Conditional) && return _const_sizeof(Bool)
     isconstType(x) && return _const_sizeof(x.parameters[1])
-    x = widenconst(x)
     if isa(x, Union)
         return tmerge(sizeof_tfunc(x.a), sizeof_tfunc(x.b))
+    end
+    # Core.sizeof operates on either a type or a value. First check which
+    # case we're in.
+    t, exact = instanceof_tfunc(x)
+    if t !== Bottom
+        # The value corresponding to `x` at runtime could be a type.
+        # Normalize the query to ask about that type.
+        x = t
+        if isa(x, Union)
+            return sizeof_nothrow(x.a) && sizeof_nothrow(x.b)
+        end
+    else
+        x = widenconst(x)
     end
     x !== DataType && isconcretetype(x) && return _const_sizeof(x)
     isprimitivetype(x) && return _const_sizeof(x)
